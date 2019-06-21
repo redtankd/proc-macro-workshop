@@ -6,4 +6,4 @@ rust:
   - nightly
 
 script:
-  - cargo check
+  - cargo test --all
