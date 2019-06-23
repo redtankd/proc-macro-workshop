@@ -6,7 +6,7 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use syn::spanned::Spanned;
-use syn::*;
+use syn::{visit::Visit, *};
 
 #[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive(input: TokenStream) -> TokenStream {
@@ -258,6 +258,79 @@ fn parse_generic_type(ty: &Type) -> Result<(Ident, Vec<Type>), TokenStream> {
 // repeated field for #[builder(each = "xxx")]
 // return attr's value "xxx"
 fn parse_attr_builder(field: &Field) -> Result<Option<String>, TokenStream> {
+    for attr in field.attrs.clone() {
+        let mut visitor = BuilderAttrVistor::new();
+        visitor.visit_attribute(&attr);
+
+        match visitor.0 {
+            Ok(None) => continue,
+            _ => {
+                return visitor.0;
+            }
+        }
+    }
+
+    return Ok(None);
+}
+
+struct BuilderAttrVistor(Result<Option<String>, TokenStream>);
+
+impl BuilderAttrVistor {
+    fn new() -> BuilderAttrVistor {
+        BuilderAttrVistor(Ok(None))
+    }
+}
+
+impl<'ast> Visit<'ast> for BuilderAttrVistor {
+    fn visit_attribute(&mut self, i: &'ast Attribute) {
+        syn::visit::visit_attribute(self, i);
+
+        // because syn::visit::visit_attribute() skip 'tts' field
+        match i.parse_meta() {
+            Ok(meta) => self.visit_meta(&meta),
+            _ => {}
+        }
+    }
+
+    fn visit_meta_list(&mut self, i: &'ast MetaList) {
+        // if it is 'builder" attr, continue
+        if "builder" == i.ident.to_string() {
+            syn::visit::visit_meta_list(self, i);
+
+            //TODO the error processing flow is not good
+            if self.0.is_err() {
+                self.0 = Err(
+                    syn::Error::new_spanned(i, "expected `builder(each = \"...\")`")
+                        .to_compile_error()
+                        .into(),
+                );
+            }
+        }
+    }
+
+    fn visit_meta_name_value(&mut self, i: &'ast MetaNameValue) {
+        // TODO need to check only 'each' is exist
+
+        // if the attr's content is right, continue
+        if "each" == i.ident.to_string() {
+            syn::visit::visit_meta_name_value(self, i);
+        } else {
+            self.0 = Err(
+                syn::Error::new_spanned(i, "expected `builder(each = \"...\")`")
+                    .to_compile_error()
+                    .into(),
+            );
+        }
+    }
+
+    fn visit_lit_str(&mut self, i: &'ast LitStr) {
+        self.0 = Ok(Some(i.value()));
+    }
+}
+
+// replaced with the visitor solution
+#[allow(dead_code)]
+fn parse_attr_builder_2(field: &Field) -> Result<Option<String>, TokenStream> {
     for attr in field.attrs.clone() {
         match attr.parse_meta() {
             Ok(Meta::List(attr)) => {
